@@ -1,0 +1,11 @@
+.idea/
+target/
+lib_managed/
+project/boot/
+.cache
+.DS_Store
+*/.DS_Store
+.DS_Store?
+
+# Local dev config
+src/main/resources/application.conf
