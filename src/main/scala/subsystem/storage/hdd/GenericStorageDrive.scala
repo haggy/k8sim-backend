@@ -7,10 +7,9 @@ import akka.actor.typed.{ActorRef, Behavior}
 import subsystem.storage.StorageInterface._
 import subsystem.workqueue.SimpleWorkQueue
 import subsystem.workqueue.SimpleWorkQueue._
+import subsystem.workqueue.models.{PushWork, QueueFull, WorkQueueEvent, WorkReady}
 
 import scala.concurrent.duration._
-
-
 
 object GenericStorageDrive {
 
@@ -33,7 +32,7 @@ object GenericStorageDrive {
   private def behavior(config: GenericStorageDriveConfig, workQueue: LinkedBlockingQueue[GenericStorageDriveOp]): Behavior[StorageCommand] =
     Behaviors.setup { context =>
 
-      val workQueue = context.spawnAnonymous(SimpleWorkQueue[GenericStorageDriveOp](WorkQueueConfig(Some(config.requestCapacity), config.processingFrequency)))
+      val workQueue = context.spawnAnonymous(SimpleWorkQueue[GenericStorageDriveOp](SimpleWorkQueueConfig(Some(config.requestCapacity), config.processingFrequency)))
       val workQueueEventHandler = context.spawnAnonymous(workQueueEventHandlerBehavior())
 
       Behaviors.receiveMessage {

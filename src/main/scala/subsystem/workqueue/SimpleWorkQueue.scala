@@ -2,39 +2,24 @@ package subsystem.workqueue
 
 import java.util.UUID
 import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.atomic.AtomicInteger
 
-import akka.actor.typed.{ActorRef, Behavior, SupervisorStrategy}
 import akka.actor.typed.scaladsl.Behaviors
+import akka.actor.typed.{ActorRef, Behavior, SupervisorStrategy}
 import subsystem.storage.StorageInterface.Frequency
+import subsystem.workqueue.models._
 
 import scala.annotation.tailrec
 
 object SimpleWorkQueue {
-  final case class WorkQueueConfig(capacity: Option[Int], processSpeed: Frequency)
-
-  sealed trait WorkQueueCommand
-  sealed trait WorkQueueEvent
-
-  final case class PushWork[T](work: T, cost: Int, replyTo: ActorRef[WorkQueueEvent]) extends WorkQueueCommand {
-    private val remainingCost = new AtomicInteger(cost)
-    def decreaseRemainingCost(by: Int): Int = remainingCost.addAndGet(-by)
-    def workComplete: Boolean = remainingCost.get() <= 0
-  }
-
-  final case class WorkQueued[T](queuedWork: T) extends WorkQueueEvent
-  final case class QueueFull[T](requestedWork: T) extends WorkQueueEvent
-  final case class WorkReady[T](work: PushWork[T]) extends WorkQueueEvent
-  private final case class ProcessWork[T](work: PushWork[T]) extends WorkQueueCommand
-
+  final case class SimpleWorkQueueConfig(capacity: Option[Int], processSpeed: Frequency)
 
   private sealed trait QueueWorkerCommand
   private sealed trait QueueWorkerEvent
   private final case object Tick extends QueueWorkerCommand
 
-  def apply[T](config: WorkQueueConfig): Behavior[WorkQueueCommand] = behavior[T](config, getQueue(config.capacity))
+  def apply[T](config: SimpleWorkQueueConfig): Behavior[WorkQueueCommand] = behavior[T](config, getQueue(config.capacity))
 
-  private def behavior[T](config: WorkQueueConfig, queue: LinkedBlockingQueue[PushWork[T]]): Behavior[WorkQueueCommand] = Behaviors.setup { context =>
+  private def behavior[T](config: SimpleWorkQueueConfig, queue: LinkedBlockingQueue[PushWork[T]]): Behavior[WorkQueueCommand] = Behaviors.setup { context =>
     var queueSize = 0
     context.watch(context.spawnAnonymous(
       Behaviors.supervise(queueWorkerBehavior(queue, context.self, config.processSpeed))
