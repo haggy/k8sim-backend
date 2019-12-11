@@ -8,6 +8,8 @@ import akka.actor.typed.{ActorRef, Behavior, SupervisorStrategy}
 import akka.actor.typed.scaladsl.Behaviors
 import subsystem.storage.StorageInterface.Frequency
 
+import scala.annotation.tailrec
+
 object SimpleWorkQueue {
   final case class WorkQueueConfig(capacity: Option[Int], processSpeed: Frequency)
 
@@ -16,7 +18,7 @@ object SimpleWorkQueue {
 
   final case class PushWork[T](work: T, cost: Int, replyTo: ActorRef[WorkQueueEvent]) extends WorkQueueCommand {
     private val remainingCost = new AtomicInteger(cost)
-    def decreaseRemainingCost(by: Int): Unit = remainingCost.addAndGet(-by)
+    def decreaseRemainingCost(by: Int): Int = remainingCost.addAndGet(-by)
     def workComplete: Boolean = remainingCost.get() <= 0
   }
 
@@ -65,20 +67,34 @@ object SimpleWorkQueue {
 
   private def queueWorkerBehavior[T](queue: LinkedBlockingQueue[PushWork[T]], replyTo: ActorRef[WorkQueueCommand], frequency: Frequency): Behavior[Tick.type] =
     Behaviors.withTimers[Tick.type] { timerCtx =>
-      val timerKey = UUID.randomUUID().toString
-      timerCtx.startTimerWithFixedDelay(timerKey, Tick, frequency.tickSleepDuration)
-      Behaviors.receiveMessagePartial {
-        case Tick =>
+
+      @tailrec
+      def processQueue(remainingCapacity: Int): Unit = remainingCapacity match {
+        case 0 => // NOOP
+        case remaining =>
           Option(queue.peek()) match {
             case None => Behaviors.same // NOOP
             case Some(work) =>
-              work.decreaseRemainingCost(frequency.perTick)
+              val workValAfterProcessing = work.decreaseRemainingCost(remaining)
+
               if(work.workComplete) {
                 queue.poll()
                 replyTo ! ProcessWork(work)
               }
-              Behaviors.same
+
+              if(workValAfterProcessing < 0) {
+                val newRemaining = workValAfterProcessing * -1
+                processQueue(newRemaining)
+              }
           }
+      }
+
+      val timerKey = UUID.randomUUID().toString
+      timerCtx.startTimerWithFixedDelay(timerKey, Tick, frequency.tickSleepDuration)
+      Behaviors.receiveMessagePartial {
+        case Tick =>
+          processQueue(frequency.perTick)
+          Behaviors.same
       }
     }
 
