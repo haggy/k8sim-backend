@@ -3,10 +3,10 @@ package subsystem
 import akka.actor.typed.{ActorRef, Behavior}
 import akka.actor.typed.scaladsl.Behaviors
 import subsystem.storage.StorageInterface.StorageCommand
-import subsystem.storage.hdd.SpindleBasedStorage
+import subsystem.storage.hdd.GenericStorageDrive
 
 object SubsystemManager {
-  final case class SubsystemManagerConfig(disk: SpindleBasedStorage.SpindleBasedConfig)
+  final case class SubsystemManagerConfig(disk: GenericStorageDrive.GenericStorageDriveConfig)
 
   sealed trait SubSysCommand
   sealed trait SubSysEvent
@@ -30,7 +30,7 @@ object SubsystemManager {
           replyTo ! InitSucceeded
           running(
             config,
-            context.spawn(SpindleBasedStorage(config.disk), "diskSubsystem")
+            context.spawn(GenericStorageDrive(config.disk), "diskSubsystem")
           )
 
         case _ =>

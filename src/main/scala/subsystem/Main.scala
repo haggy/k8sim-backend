@@ -7,7 +7,7 @@ import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
 import akka.actor.typed.{ActorRef, ActorSystem, Behavior}
 import subsystem.SubsystemManager.{DiskSubsystemRequest, SubSysEvent, SubsystemManagerConfig}
 import subsystem.storage.StorageInterface.{StorageEvent, StoragePath, WriteData}
-import subsystem.storage.hdd.SpindleBasedStorage.SpindleBasedConfig
+import subsystem.storage.hdd.GenericStorageDrive.GenericStorageDriveConfig
 
 import scala.concurrent.duration._
 
@@ -50,6 +50,6 @@ object Main extends App {
   }
 
   ActorSystem(Main(
-    SubsystemManagerConfig(SpindleBasedConfig())
+    SubsystemManagerConfig(GenericStorageDriveConfig())
   ), "system")
 }

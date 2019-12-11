@@ -2,7 +2,7 @@ package subsystem.storage.hdd
 
 import java.util.concurrent.LinkedBlockingQueue
 
-import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
+import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.{ActorRef, Behavior}
 import subsystem.storage.StorageInterface._
 import subsystem.workqueue.SimpleWorkQueue
@@ -12,38 +12,38 @@ import scala.concurrent.duration._
 
 
 
-object SpindleBasedStorage {
+object GenericStorageDrive {
 
-  final case class SpindleBasedConfig(processingFrequency: Frequency = Frequency(5, 250.millis), requestCapacity: Int = 25)
+  final case class Costs(write: Int, read: Int)
+  final case class GenericStorageDriveConfig(processingFrequency: Frequency = Frequency(50, 250.millis),
+                                             requestCapacity: Int = 200,
+                                             costs: Costs = Costs(100, 7)
+                                            )
 
   trait NeedsReply[T] {
     val replyTo: ActorRef[T]
   }
-  private sealed trait SpindleStorageOp extends StorageOp with NeedsReply[StorageEvent]
+  private sealed trait GenericStorageDriveOp extends StorageOp with NeedsReply[StorageEvent]
 
-  private final case class WriteBlock(path: StoragePath, data: Array[Byte], replyTo: ActorRef[StorageEvent]) extends SpindleStorageOp {
-    override protected val cost: Int = 10
-  }
-  private final case class ReadBlock(path: StoragePath, replyTo: ActorRef[StorageEvent]) extends SpindleStorageOp {
-    override protected val cost: Int = 7
-  }
+  private final case class WriteBlock(path: StoragePath, data: Array[Byte], cost: Int, replyTo: ActorRef[StorageEvent]) extends GenericStorageDriveOp
+  private final case class ReadBlock(path: StoragePath, cost: Int, replyTo: ActorRef[StorageEvent]) extends GenericStorageDriveOp
 
-  def apply(conf: SpindleBasedConfig): Behavior[StorageCommand] = behavior(conf, new LinkedBlockingQueue[SpindleStorageOp]())
+  def apply(conf: GenericStorageDriveConfig): Behavior[StorageCommand] = behavior(conf, new LinkedBlockingQueue[GenericStorageDriveOp]())
 
-  private def behavior(config: SpindleBasedConfig, workQueue: LinkedBlockingQueue[SpindleStorageOp]): Behavior[StorageCommand] =
+  private def behavior(config: GenericStorageDriveConfig, workQueue: LinkedBlockingQueue[GenericStorageDriveOp]): Behavior[StorageCommand] =
     Behaviors.setup { context =>
 
-      val workQueue = context.spawnAnonymous(SimpleWorkQueue[SpindleStorageOp](WorkQueueConfig(Some(config.requestCapacity), config.processingFrequency)))
+      val workQueue = context.spawnAnonymous(SimpleWorkQueue[GenericStorageDriveOp](WorkQueueConfig(Some(config.requestCapacity), config.processingFrequency)))
       val workQueueEventHandler = context.spawnAnonymous(workQueueEventHandlerBehavior())
 
       Behaviors.receiveMessage {
         case wd: WriteData =>
-          val writeBlock = WriteBlock(wd.path, wd.data, wd.replyTo)
+          val writeBlock = WriteBlock(wd.path, wd.data, config.costs.write, wd.replyTo)
           context.log.debug("Enqueing write at [{}] with cost [{}]", wd.path.key, writeBlock.getCost)
           workQueue ! PushWork(writeBlock, writeBlock.getCost, workQueueEventHandler)
           Behaviors.same
         case rd: ReadData =>
-          val readBlock = ReadBlock(rd.path, rd.replyTo)
+          val readBlock = ReadBlock(rd.path, config.costs.read, rd.replyTo)
           context.log.debug("Enqueing read at [{}] with cost [{}]", rd.path.key, readBlock.getCost)
           workQueue ! PushWork(readBlock, readBlock.getCost, workQueueEventHandler)
           Behaviors.same
