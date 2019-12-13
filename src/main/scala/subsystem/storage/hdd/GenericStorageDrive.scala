@@ -5,6 +5,7 @@ import java.util.concurrent.LinkedBlockingQueue
 import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.{ActorRef, Behavior}
 import subsystem.storage.StorageInterface._
+import subsystem.util.AkkaUtils.NeedsReply
 import subsystem.workqueue.SimpleWorkQueue
 import subsystem.workqueue.SimpleWorkQueue._
 import subsystem.workqueue.models.{PushWork, QueueFull, WorkQueueEvent, WorkReady}
@@ -19,9 +20,6 @@ object GenericStorageDrive {
                                              costs: Costs = Costs(100, 7)
                                             )
 
-  trait NeedsReply[T] {
-    val replyTo: ActorRef[T]
-  }
   private sealed trait GenericStorageDriveOp extends StorageOp with NeedsReply[StorageEvent]
 
   private final case class WriteBlock(path: StoragePath, data: Array[Byte], cost: Int, replyTo: ActorRef[StorageEvent]) extends GenericStorageDriveOp
