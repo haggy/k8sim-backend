@@ -14,7 +14,7 @@ import scala.util.{Failure, Success}
 object Pod {
   type PodId = UUID
   final case class PodMeta(id: PodId)
-  final case class PodConfig(initMessageTimeout: Timeout, subsystemManagerConfig: SubsystemManagerConfig)
+  final case class PodConfig(subsystemManagerConfig: SubsystemManagerConfig)
   sealed trait PodCommand
   sealed trait PodEvent
 
@@ -32,10 +32,9 @@ object Pod {
   final case object Running extends PodStatus { val asString = "running" }
   final case object Failed extends PodStatus { val asString = "failed" }
 
-  def apply(): Behavior[PodCommand] = Behaviors.receive { (context, message) =>
+  def apply()(implicit askTimeout: Timeout): Behavior[PodCommand] = Behaviors.receive { (context, message) =>
     message match {
       case StartPod(conf, originalSender) =>
-        implicit val askTimeout: Timeout = conf.initMessageTimeout
 
         val myId = UUID.randomUUID()
         val meta = PodMeta(myId)
@@ -63,6 +62,8 @@ object Pod {
       case GetStatus(replyTo) =>
         replyTo ! Stopped
         Behaviors.same
+
+      case _ => Behaviors.same
     }
   }
 

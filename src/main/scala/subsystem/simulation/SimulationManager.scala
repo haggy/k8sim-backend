@@ -9,12 +9,13 @@ import subsystem.components.Pod
 import subsystem.util.AkkaUtils.NeedsReply
 
 import scala.util.{Failure, Success}
+import scala.concurrent.duration._
 
 object SimulationManager {
   type SimulationId = UUID
   final case class SimManagerMeta(id: SimulationId)
 
-  final case class SimulationConfig(messageTimeout: Timeout)
+  final case class SimulationConfig(messageTimeout: Timeout = Timeout(3.seconds))
 
   sealed trait SimManagerCommand
   sealed trait SimManagerEvent
@@ -24,6 +25,7 @@ object SimulationManager {
   final case class CreatePod(config: Pod.PodConfig, replyTo: ActorRef[SimManagerEvent]) extends SimManagerCommand with NeedsReply[SimManagerEvent]
   final case class PodCreated(meta: Pod.PodMeta) extends SimManagerEvent
   final case class PodCreateFailed(meta: Option[Pod.PodMeta], cause: Throwable) extends SimManagerEvent
+  final case object EndSimulation extends SimManagerCommand
 
   private final case class HandlePodCreated(meta: Pod.PodMeta, replyTo: ActorRef[SimManagerEvent]) extends SimManagerCommand with NeedsReply[SimManagerEvent]
   private final case class HandlePodCreateFailure(meta: Pod.PodMeta, cause: Throwable, replyTo: ActorRef[SimManagerEvent]) extends SimManagerCommand with NeedsReply[SimManagerEvent]
@@ -41,6 +43,10 @@ object SimulationManager {
         val meta = SimManagerMeta(UUID.randomUUID())
         replyTo ! SimulationStarted(meta)
         running(config, meta, ComponentTracker())
+
+      case msg =>
+        context.log.warn("Ignoring message since Simulation has not been started: [{}]", msg)
+        Behaviors.same
     }
   }
 
@@ -53,6 +59,7 @@ object SimulationManager {
         context.ask(pod, (ref: ActorRef[Pod.PodEvent]) =>  Pod.StartPod(podConf, ref)) {
           case Success(started: Pod.PodStarted) => HandlePodCreated(started.meta, originalSender)
           case Success(failed: Pod.PodStartupFailed) => HandlePodCreateFailure(failed.meta, failed.cause, originalSender)
+          case Success(other) => HandleUnknownPodCreateFailure(new Exception(s"Unknown response received: $other"), originalSender)
           case Failure(t) => HandleUnknownPodCreateFailure(t, originalSender)
         }
         Behaviors.same
@@ -66,6 +73,8 @@ object SimulationManager {
       case HandleUnknownPodCreateFailure(cause, replyTo) =>
         replyTo ! PodCreateFailed(None, cause)
         Behaviors.same
+
+      case EndSimulation => Behaviors.stopped
     }
   }
 }

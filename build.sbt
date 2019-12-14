@@ -7,8 +7,9 @@ scalaVersion := "2.12.8"
 val versions = Map(
   'akka -> "2.6.1",
   'logback -> "1.2.3",
-  'circe -> "0.11.1",
-  'finch -> "0.31.0"
+  'circe -> "0.12.3",
+  'finch -> "0.31.0",
+  'circeConfig -> "0.7.0"
 )
 
 libraryDependencies ++= Seq(
@@ -16,5 +17,6 @@ libraryDependencies ++= Seq(
   "ch.qos.logback" % "logback-classic" % versions('logback),
   "com.github.finagle" %% "finch-core" % versions('finch),
   "com.github.finagle" %% "finch-circe" % versions('finch),
-  "io.circe" %% "circe-generic" % versions('circe)
+  "io.circe" %% "circe-generic" % versions('circe),
+  "io.circe" %% "circe-config" % versions('circeConfig)
 )
