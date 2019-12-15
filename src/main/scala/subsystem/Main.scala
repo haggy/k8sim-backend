@@ -7,7 +7,7 @@ import akka.actor.typed.{ActorRef, ActorSystem, Behavior}
 import akka.util.Timeout
 import org.slf4j.Logger
 import subsystem.SimulationsManager.CreateSimulation
-import subsystem.components.Pod
+import subsystem.components.{ContainerWorkload, Pod}
 import subsystem.config.AppConfig
 import subsystem.http.Server
 import subsystem.simulation.SimulationManager
@@ -26,14 +26,21 @@ object SimulationsManager {
   final case class SimulationCreated(meta: SimulationManager.SimManagerMeta) extends SimsManagerEvent
   final case class EndSimulation(simId: SimulationManager.SimulationId, replyTo: ActorRef[SimsManagerEvent]) extends SimsManagerCommand with NeedsReply[SimsManagerEvent]
   final case class NoSimulationFound(simId: SimulationManager.SimulationId) extends SimsManagerEvent
+  private final case class HandleSimStartEvent(resp: SimulationManager.SimulationStarted, simMgr: ActorRef[SimulationManager.SimManagerCommand], replyTo: ActorRef[SimsManagerEvent]) extends SimsManagerCommand
+  private final case class HandleSimulationStartFailure(cause: Throwable, replyTo: ActorRef[SimsManagerEvent]) extends SimsManagerCommand with NeedsReply[SimsManagerEvent]
+
   final case object SimulationEnded extends SimsManagerEvent
   final case class CreatePod(simId: SimulationManager.SimulationId, podConf: Pod.PodConfig, replyTo: ActorRef[SimsManagerEvent]) extends SimsManagerCommand with NeedsReply[SimsManagerEvent]
-  final case class HandlePodCreateResp(resp: SimsManagerEvent, originalSender: ActorRef[SimsManagerEvent]) extends SimsManagerCommand
+  private final case class HandlePodCreateResp(resp: SimsManagerEvent, originalSender: ActorRef[SimsManagerEvent]) extends SimsManagerCommand
   final case class PodCreated(meta: Pod.PodMeta) extends SimsManagerEvent
   final case class PodCreateFailed(cause: Throwable) extends SimsManagerEvent
 
-  private final case class HandleSimStartEvent(resp: SimulationManager.SimulationStarted, simMgr: ActorRef[SimulationManager.SimManagerCommand], replyTo: ActorRef[SimsManagerEvent]) extends SimsManagerCommand
-  private final case class HandleSimulationStartFailure(cause: Throwable, replyTo: ActorRef[SimsManagerEvent]) extends SimsManagerCommand with NeedsReply[SimsManagerEvent]
+  final case class StartWorkload(simId: SimulationManager.SimulationId, podId: Pod.PodId, config: ContainerWorkload.NewContainerWorkloadConfig, replyTo: ActorRef[SimsManagerEvent]) extends SimsManagerCommand with NeedsReply[SimsManagerEvent]
+  private final case class HandleWorkloadEvent(ev: SimulationManager.SimManagerEvent, originalSender: ActorRef[SimsManagerEvent]) extends SimsManagerCommand
+  private final case class HandleWorkloadFailure(cause: Throwable, originalSender: ActorRef[SimsManagerEvent]) extends SimsManagerCommand
+  final case class WorkloadStarted(meta: ContainerWorkload.WorkloadMeta) extends SimsManagerEvent
+  final case class WorkloadStartFailed(cause: Throwable) extends SimsManagerEvent
+
   private final case class SimulationTracker(private val activeSims: Map[SimulationManager.SimulationId, ActorRef[SimulationManager.SimManagerCommand]] = Map.empty) {
     def add(id: SimulationManager.SimulationId, ref: ActorRef[SimulationManager.SimManagerCommand]): SimulationTracker =
       copy(activeSims + (id -> ref))
@@ -85,6 +92,29 @@ object SimulationsManager {
 
       case HandlePodCreateResp(resp, replyTo) =>
         replyTo ! resp
+        Behaviors.same
+
+      case StartWorkload(simId, podId, config, replyTo) =>
+        tracker.get(simId) match {
+          case None => replyTo ! NoSimulationFound(simId)
+          case Some(simMgrRef) =>
+            context.ask(simMgrRef, SimulationManager.StartPodWorkload(podId, config, _)) {
+              case Success(ev) => HandleWorkloadEvent(ev, replyTo)
+              case Failure(t) => HandleWorkloadFailure(t, replyTo)
+            }
+        }
+        Behaviors.same
+
+      case HandleWorkloadEvent(SimulationManager.PodWorkloadStarted(meta), replyTo) =>
+        replyTo ! WorkloadStarted(meta)
+        Behaviors.same
+
+      case HandleWorkloadEvent(SimulationManager.PodWorkloadStartFailed(cause), replyTo) =>
+        replyTo ! WorkloadStartFailed(cause)
+        Behaviors.same
+
+      case HandleWorkloadFailure(cause, replyTo) =>
+        replyTo ! WorkloadStartFailed(cause)
         Behaviors.same
     }
   }

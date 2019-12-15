@@ -3,10 +3,11 @@ package subsystem.config
 import com.typesafe.config.{Config, ConfigFactory}
 import io.circe.config.syntax._
 import io.circe.generic.auto._
+import subsystem.http.filters.CorsFilter.CorsConfig
 
 import scala.concurrent.duration.FiniteDuration
 
-final case class HttpConfig(port: Int)
+final case class HttpConfig(port: Int, cors: CorsConfig)
 final case class GlobalAkkaSettings(defaultAskTimeoutDuration: FiniteDuration)
 final case class AppConfig(http: HttpConfig, globalAkkaSettings: GlobalAkkaSettings)
 
