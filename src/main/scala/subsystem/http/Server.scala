@@ -99,6 +99,16 @@ class Server(config: HttpServerConfig, simsMgrRef: ActorRef[SimulationsManager.S
       }.asTwitter
   }
 
+  private val stopWorkload: Endpoint[Unit] = delete(SimulationRoot :: path[SimulationManager.SimulationId] :: PodRoot :: path[Pod.PodId] :: WorkloadRoot :: path[ContainerWorkload.WorkloadId]) {
+    (simId: SimulationManager.SimulationId, podId: Pod.PodId, workloadId: ContainerWorkload.WorkloadId) =>
+      simsMgrRef.ask[SimulationsManager.SimsManagerEvent] { ref =>
+        SimulationsManager.StopWorkload(simId, podId, workloadId, ref)
+      }.map {
+        case SimulationsManager.WorkloadStopped => Ok({})
+        case other => unknownManagerResponse(other)
+      }.asTwitter
+  }
+
   private def unknownManagerResponse(resp: SimulationsManager.SimsManagerEvent) =
     InternalServerError(new Exception("Invalid simulation manager response"))
 
@@ -109,7 +119,9 @@ class Server(config: HttpServerConfig, simsMgrRef: ActorRef[SimulationsManager.S
         createSimulation :+:
         stopSimulation :+:
         createPod :+:
-        newWorkload).toServiceAs[Application.Json]
+        newWorkload :+:
+        stopWorkload
+        ).toServiceAs[Application.Json]
 
   def start(): ListeningServer = {
     Await.ready(Http.server.serve(

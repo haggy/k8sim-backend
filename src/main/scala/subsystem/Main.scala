@@ -36,10 +36,12 @@ object SimulationsManager {
   final case class PodCreateFailed(cause: Throwable) extends SimsManagerEvent
 
   final case class StartWorkload(simId: SimulationManager.SimulationId, podId: Pod.PodId, config: ContainerWorkload.NewContainerWorkloadConfig, replyTo: ActorRef[SimsManagerEvent]) extends SimsManagerCommand with NeedsReply[SimsManagerEvent]
+  final case class StopWorkload(simId: SimulationManager.SimulationId, podId: Pod.PodId, workloadId: ContainerWorkload.WorkloadId, replyTo: ActorRef[SimsManagerEvent]) extends SimsManagerCommand with NeedsReply[SimsManagerEvent]
   private final case class HandleWorkloadEvent(ev: SimulationManager.SimManagerEvent, originalSender: ActorRef[SimsManagerEvent]) extends SimsManagerCommand
   private final case class HandleWorkloadFailure(cause: Throwable, originalSender: ActorRef[SimsManagerEvent]) extends SimsManagerCommand
   final case class WorkloadStarted(meta: ContainerWorkload.WorkloadMeta) extends SimsManagerEvent
   final case class WorkloadStartFailed(cause: Throwable) extends SimsManagerEvent
+  final case object WorkloadStopped extends SimsManagerEvent
 
   private final case class SimulationTracker(private val activeSims: Map[SimulationManager.SimulationId, ActorRef[SimulationManager.SimManagerCommand]] = Map.empty) {
     def add(id: SimulationManager.SimulationId, ref: ActorRef[SimulationManager.SimManagerCommand]): SimulationTracker =
@@ -105,12 +107,27 @@ object SimulationsManager {
         }
         Behaviors.same
 
+      case StopWorkload(simId, podId, workloadId, replyTo) =>
+        tracker.get(simId) match {
+          case None => replyTo ! NoSimulationFound(simId)
+          case Some(simMgrRef) =>
+            context.ask(simMgrRef, SimulationManager.StopPodWorkload(podId, workloadId, _)) {
+              case Success(ev) => HandleWorkloadEvent(ev, replyTo)
+              case Failure(t) => HandleWorkloadFailure(t, replyTo)
+            }
+        }
+        Behaviors.same
+
       case HandleWorkloadEvent(SimulationManager.PodWorkloadStarted(meta), replyTo) =>
         replyTo ! WorkloadStarted(meta)
         Behaviors.same
 
       case HandleWorkloadEvent(SimulationManager.PodWorkloadStartFailed(cause), replyTo) =>
         replyTo ! WorkloadStartFailed(cause)
+        Behaviors.same
+
+      case HandleWorkloadEvent(SimulationManager.PodWorkloadStopped, replyTo) =>
+        replyTo ! WorkloadStopped
         Behaviors.same
 
       case HandleWorkloadFailure(cause, replyTo) =>

@@ -33,7 +33,9 @@ object SimulationManager {
   private final case class HandleUnknownPodCreateFailure(cause: Throwable, replyTo: ActorRef[SimManagerEvent]) extends SimManagerCommand with NeedsReply[SimManagerEvent]
 
   final case class StartPodWorkload(podId: Pod.PodId, config: ContainerWorkload.NewContainerWorkloadConfig, replyTo: ActorRef[SimManagerEvent]) extends SimManagerCommand with NeedsReply[SimManagerEvent]
+  final case class StopPodWorkload(podId: Pod.PodId, workloadId: ContainerWorkload.WorkloadId, replyTo: ActorRef[SimManagerEvent]) extends SimManagerCommand with NeedsReply[SimManagerEvent]
   final case class PodWorkloadStarted(meta: ContainerWorkload.WorkloadMeta) extends SimManagerEvent
+  final case object PodWorkloadStopped extends SimManagerEvent
   final case class PodWorkloadStartFailed(cause: Throwable) extends SimManagerEvent
   private final case class HandlePodWorkloadEvent(ev: Pod.PodEvent, originalRequester: ActorRef[SimManagerEvent]) extends SimManagerCommand
   private final case class HandlePodWorkloadFailure(cause: Throwable, originalRequester: ActorRef[SimManagerEvent]) extends SimManagerCommand
@@ -62,6 +64,7 @@ object SimulationManager {
 
   private def running(config: SimulationConfig, simMeta: SimManagerMeta, compTracker: ComponentTracker): Behavior[SimManagerCommand] = Behaviors.setup { context =>
     implicit val askTimeout: Timeout = config.messageTimeout
+    val ignoringPodEventRef = context.spawnAnonymous(Behaviors.ignore[Pod.PodEvent])
 
     Behaviors.receiveMessagePartial {
       case CreatePod(podConf, originalSender) =>
@@ -93,6 +96,15 @@ object SimulationManager {
               case Success(ev) => HandlePodWorkloadEvent(ev, replyTo)
               case Failure(t) => HandlePodWorkloadFailure(t, replyTo)
             }
+        }
+        Behaviors.same
+
+      case StopPodWorkload(podId, workloadId, replyTo) =>
+        compTracker.getPod(podId) match {
+          case None => replyTo ! PodNotFound(podId)
+          case Some(podRef) =>
+            podRef ! Pod.StopWorkload(workloadId, ignoringPodEventRef)
+            replyTo ! PodWorkloadStopped
         }
         Behaviors.same
 
