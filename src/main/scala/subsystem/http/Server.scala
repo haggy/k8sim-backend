@@ -11,7 +11,7 @@ import io.circe.generic.auto._
 import subsystem.util.JsonUtils._
 import subsystem.SimulationsManager
 import subsystem.http.Server._
-import subsystem.simulation.SimulationManager
+import subsystem.simulation.{SimulationManager, StatsCollector}
 import subsystem.util.FutureUtils._
 
 import scala.concurrent.ExecutionContext
@@ -39,6 +39,8 @@ object Server {
 
   final case class NewWorkloadReq(workload: ContainerWorkload.NewContainerWorkloadConfig)
   final case class NewWorkloadResp(meta: ContainerWorkload.WorkloadMeta)
+
+  final case class AllStatsResp(stats: List[StatsCollector.FlushedStatsForComponent])
 
 }
 class Server(config: HttpServerConfig, simsMgrRef: ActorRef[SimulationsManager.SimsManagerCommand])(implicit ec: ExecutionContext, scheduler: Scheduler) {
@@ -109,6 +111,18 @@ class Server(config: HttpServerConfig, simsMgrRef: ActorRef[SimulationsManager.S
       }.asTwitter
   }
 
+  private val getAllStats: Endpoint[AllStatsResp] = get(SimulationRoot :: path[UUID] :: "stats") { simId: UUID =>
+    simsMgrRef.ask[SimulationsManager.SimsManagerEvent] { ref =>
+      SimulationsManager.GetAllStatistics(simId, ref)
+    }
+      .map {
+        case SimulationsManager.RetrievedStatistics(stats) => Ok(AllStatsResp(stats.allStats))
+        case SimulationsManager.NoSimulationFound(_) => NotFound(new Exception("No simulation found"))
+        case other => unknownManagerResponse(other)
+      }
+      .asTwitter
+  }
+
   private def unknownManagerResponse(resp: SimulationsManager.SimsManagerEvent) =
     InternalServerError(new Exception("Invalid simulation manager response"))
 
@@ -120,7 +134,8 @@ class Server(config: HttpServerConfig, simsMgrRef: ActorRef[SimulationsManager.S
         stopSimulation :+:
         createPod :+:
         newWorkload :+:
-        stopWorkload
+        stopWorkload :+:
+        getAllStats
         ).toServiceAs[Application.Json]
 
   def start(): ListeningServer = {

@@ -7,7 +7,9 @@ import akka.actor.typed.{ActorRef, Behavior}
 import akka.util.Timeout
 import subsystem.SubsystemManager
 import subsystem.SubsystemManager.SubsystemManagerConfig
+import subsystem.simulation.StatsCollector
 import subsystem.util.AkkaUtils.NeedsReply
+
 import scala.concurrent.duration._
 import scala.concurrent.duration.FiniteDuration
 import scala.util.{Failure, Success}
@@ -21,7 +23,7 @@ object Pod {
   sealed trait PodCommand
   sealed trait PodEvent
 
-  final case class StartPod(config: PodConfig, replyTo: ActorRef[PodEvent]) extends PodCommand with NeedsReply[PodEvent]
+  final case class StartPod(config: PodConfig, statsCollector: ActorRef[StatsCollector.StatsCollectorCommand], replyTo: ActorRef[PodEvent]) extends PodCommand with NeedsReply[PodEvent]
   final case class PodStarted(meta: PodMeta) extends PodEvent
   final case class PodStartupFailed(meta: PodMeta, cause: Throwable) extends PodEvent
   final case class GetStatus(replyTo: ActorRef[PodEvent]) extends PodCommand with NeedsReply[PodEvent]
@@ -62,7 +64,7 @@ object Pod {
 
   def apply()(implicit askTimeout: Timeout): Behavior[PodCommand] = Behaviors.receive { (context, message) =>
     message match {
-      case StartPod(conf, originalSender) =>
+      case StartPod(conf, statsCollector, originalSender) =>
 
         val myId = UUID.randomUUID()
         val meta = PodMeta(myId)
@@ -79,8 +81,9 @@ object Pod {
 
         Behaviors.receiveMessagePartial {
           case HandleSubsytemStartupComplete(replyTo) =>
+            context.log.info("Pod running with ID [{}]", meta.id)
             replyTo ! PodStarted(meta)
-            podRunning(meta, conf, WorkloadTracker(), subsysMgr)
+            podRunning(meta, conf, WorkloadTracker(), subsysMgr, statsCollector)
 
           case HandleSubsytemStartupFailed(replyTo, cause) =>
             replyTo ! PodStartupFailed(meta, cause)
@@ -100,8 +103,8 @@ object Pod {
   private def podRunning(selfMeta: PodMeta,
                          config: PodConfig,
                          workloadTracker: WorkloadTracker,
-                         subsystemMgr: ActorRef[SubsystemManager.SubSysCommand])(implicit askTimeout: Timeout): Behavior[PodCommand] = Behaviors.setup { context =>
-    context.log.info("Pod running with ID [{}]", selfMeta.id)
+                         subsystemMgr: ActorRef[SubsystemManager.SubSysCommand],
+                         statsCollector: ActorRef[StatsCollector.StatsCollectorCommand])(implicit askTimeout: Timeout): Behavior[PodCommand] = Behaviors.setup { context =>
     Behaviors.receiveMessagePartial {
       case GetStatus(replyTo) =>
         replyTo ! Running
@@ -112,6 +115,7 @@ object Pod {
           context.self,
           subsystemMgr,
           askTimeout,
+          statsCollector,
           config.workload.tickInterval
         )))
         context.ask(workload, (ref: ActorRef[ContainerWorkload.ContainerWorkloadEvent]) => ContainerWorkload.StartWorkload(workloadConfig, ref)) {
@@ -122,7 +126,7 @@ object Pod {
 
       case HandleContainerWorkloadEvent(ContainerWorkload.WorkloadStarted(wlMeta), workloadRef, replyTo) =>
         replyTo ! WorkloadStarted(wlMeta)
-        podRunning(selfMeta, config, workloadTracker.add(wlMeta.id, workloadRef), subsystemMgr)
+        podRunning(selfMeta, config, workloadTracker.add(wlMeta.id, workloadRef), subsystemMgr, statsCollector)
 
       case HandleContainerWorkloadFailure(cause, workloadRef, replyTo) =>
         context.stop(workloadRef)
@@ -135,7 +139,7 @@ object Pod {
           WorkloadStopped
         }
         replyTo ! event
-        podRunning(selfMeta, config, workloadTracker.remove(id), subsystemMgr)
+        podRunning(selfMeta, config, workloadTracker.remove(id), subsystemMgr, statsCollector)
     }
   }
 }

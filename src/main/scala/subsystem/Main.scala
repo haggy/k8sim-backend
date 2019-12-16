@@ -6,11 +6,10 @@ import akka.actor.typed.scaladsl.{ActorContext, Behaviors}
 import akka.actor.typed.{ActorRef, ActorSystem, Behavior}
 import akka.util.Timeout
 import org.slf4j.Logger
-import subsystem.SimulationsManager.CreateSimulation
 import subsystem.components.{ContainerWorkload, Pod}
 import subsystem.config.AppConfig
 import subsystem.http.Server
-import subsystem.simulation.SimulationManager
+import subsystem.simulation.{SimulationManager, StatsCollector}
 import subsystem.util.AkkaUtils.NeedsReply
 
 import scala.concurrent.duration._
@@ -42,6 +41,13 @@ object SimulationsManager {
   final case class WorkloadStarted(meta: ContainerWorkload.WorkloadMeta) extends SimsManagerEvent
   final case class WorkloadStartFailed(cause: Throwable) extends SimsManagerEvent
   final case object WorkloadStopped extends SimsManagerEvent
+
+  final case class GetAllStatistics(simId: SimulationManager.SimulationId, replyTo: ActorRef[SimsManagerEvent]) extends SimsManagerCommand with NeedsReply[SimsManagerEvent]
+  final case class RetrievedStatistics(allStats: StatsCollector.AllStatsFlushed) extends SimsManagerEvent
+  final case class GetStatisticsFailed(cause: Throwable) extends SimsManagerEvent
+
+  private final case class HandleStatsEvent(ev: SimulationManager.SimManagerEvent, originalRequester: ActorRef[SimsManagerEvent]) extends SimsManagerCommand
+  private final case class HandleStatsError(cause: Throwable, originalRequester: ActorRef[SimsManagerEvent]) extends SimsManagerCommand
 
   private final case class SimulationTracker(private val activeSims: Map[SimulationManager.SimulationId, ActorRef[SimulationManager.SimManagerCommand]] = Map.empty) {
     def add(id: SimulationManager.SimulationId, ref: ActorRef[SimulationManager.SimManagerCommand]): SimulationTracker =
@@ -132,6 +138,25 @@ object SimulationsManager {
 
       case HandleWorkloadFailure(cause, replyTo) =>
         replyTo ! WorkloadStartFailed(cause)
+        Behaviors.same
+
+      case GetAllStatistics(simId: SimulationManager.SimulationId, replyTo) =>
+        tracker.get(simId) match {
+          case None => replyTo ! NoSimulationFound(simId)
+          case Some(simMgrRef) =>
+            context.ask(simMgrRef, SimulationManager.GetAllStatistics) {
+              case Success(ev) => HandleStatsEvent(ev, replyTo)
+              case Failure(t) => HandleStatsError(t, replyTo)
+            }
+        }
+        Behaviors.same
+
+      case HandleStatsEvent(ev: SimulationManager.RetrievedStatistics, replyTo) =>
+        replyTo ! RetrievedStatistics(ev.allStats)
+        Behaviors.same
+
+      case HandleStatsError(cause, replyTo) =>
+        replyTo ! GetStatisticsFailed(cause)
         Behaviors.same
     }
   }

@@ -40,10 +40,21 @@ object SimulationManager {
   private final case class HandlePodWorkloadEvent(ev: Pod.PodEvent, originalRequester: ActorRef[SimManagerEvent]) extends SimManagerCommand
   private final case class HandlePodWorkloadFailure(cause: Throwable, originalRequester: ActorRef[SimManagerEvent]) extends SimManagerCommand
 
+  final case class GetAllStatistics(replyTo: ActorRef[SimManagerEvent]) extends SimManagerCommand with NeedsReply[SimManagerEvent]
+  final case class RetrievedStatistics(allStats: StatsCollector.AllStatsFlushed) extends SimManagerEvent
+  final case class GetStatisticsFailed(cause: Throwable) extends SimManagerEvent
+
+  private final case class HandleStatsEvent(ev: StatsCollector.StatsCollectorEvent, originalRequester: ActorRef[SimManagerEvent]) extends SimManagerCommand
+  private final case class HandleStatsError(cause: Throwable, originalRequester: ActorRef[SimManagerEvent]) extends SimManagerCommand
+
   private final case class ComponentTracker(private val pods: Map[Pod.PodId, ActorRef[Pod.PodCommand]] = Map.empty) {
     def addPod(id: Pod.PodId, newPod: ActorRef[Pod.PodCommand]): ComponentTracker = copy(pods + (id -> newPod))
     def getPod(id: Pod.PodId): Option[ActorRef[Pod.PodCommand]] = pods.get(id)
     def removePod(id: Pod.PodId): ComponentTracker = copy(pods - id)
+  }
+
+  private val ignoringBehaviorWithSelfKill: Behavior[Pod.PodEvent] = Behaviors.receiveMessagePartial {
+    case _ => Behaviors.stopped
   }
 
   def apply(): Behavior[SimManagerCommand] = initialBehavior
@@ -52,9 +63,10 @@ object SimulationManager {
     message match {
       case StartSimulationManager(config, replyTo) =>
         val meta = SimManagerMeta(UUID.randomUUID())
+        val statsCollector = context.spawnAnonymous(StatsCollector())
         context.log.info("Starting simulation manager with ID [{}]", meta.id)
         replyTo ! SimulationStarted(meta)
-        running(config, meta, ComponentTracker())
+        running(config, meta, ComponentTracker(), statsCollector)
 
       case msg =>
         context.log.warn("Ignoring message since Simulation has not been started: [{}]", msg)
@@ -62,14 +74,16 @@ object SimulationManager {
     }
   }
 
-  private def running(config: SimulationConfig, simMeta: SimManagerMeta, compTracker: ComponentTracker): Behavior[SimManagerCommand] = Behaviors.setup { context =>
+  private def running(config: SimulationConfig,
+                      simMeta: SimManagerMeta,
+                      compTracker: ComponentTracker,
+                      statsCollector: ActorRef[StatsCollector.StatsCollectorCommand]): Behavior[SimManagerCommand] = Behaviors.setup { context =>
     implicit val askTimeout: Timeout = config.messageTimeout
-    val ignoringPodEventRef = context.spawnAnonymous(Behaviors.ignore[Pod.PodEvent])
 
     Behaviors.receiveMessagePartial {
       case CreatePod(podConf, originalSender) =>
         val pod = context.spawnAnonymous(Pod())
-        context.ask(pod, (ref: ActorRef[Pod.PodEvent]) =>  Pod.StartPod(podConf, ref)) {
+        context.ask(pod, (ref: ActorRef[Pod.PodEvent]) =>  Pod.StartPod(podConf, statsCollector, ref)) {
           case Success(started: Pod.PodStarted) => HandlePodCreated(started.meta, pod, originalSender)
           case Success(failed: Pod.PodStartupFailed) => HandlePodCreateFailure(failed.meta, failed.cause, originalSender)
           case Success(other) => HandleUnknownPodCreateFailure(new Exception(s"Unknown response received: $other"), originalSender)
@@ -79,7 +93,7 @@ object SimulationManager {
 
       case HandlePodCreated(podMeta, podRef, replyTo) =>
         replyTo ! PodCreated(podMeta)
-        running(config, simMeta, compTracker.addPod(podMeta.id, podRef))
+        running(config, simMeta, compTracker.addPod(podMeta.id, podRef), statsCollector)
 
       case HandlePodCreateFailure(meta, cause, replyTo) =>
         replyTo ! PodCreateFailed(Some(meta), cause)
@@ -103,7 +117,7 @@ object SimulationManager {
         compTracker.getPod(podId) match {
           case None => replyTo ! PodNotFound(podId)
           case Some(podRef) =>
-            podRef ! Pod.StopWorkload(workloadId, ignoringPodEventRef)
+            podRef ! Pod.StopWorkload(workloadId, context.spawnAnonymous(ignoringBehaviorWithSelfKill))
             replyTo ! PodWorkloadStopped
         }
         Behaviors.same
@@ -118,6 +132,21 @@ object SimulationManager {
 
       case HandlePodWorkloadFailure(cause, replyTo) =>
         replyTo ! PodWorkloadStartFailed(cause)
+        Behaviors.same
+
+      case GetAllStatistics(replyTo) =>
+        context.ask(statsCollector, StatsCollector.FlushAllStats) {
+          case Success(ev) => HandleStatsEvent(ev, replyTo)
+          case Failure(t) => HandleStatsError(t, replyTo)
+        }
+        Behaviors.same
+
+      case HandleStatsEvent(stats: StatsCollector.AllStatsFlushed, replyTo) =>
+        replyTo ! RetrievedStatistics(stats)
+        Behaviors.same
+
+      case HandleStatsError(cause, replyTo) =>
+        replyTo ! GetStatisticsFailed(cause)
         Behaviors.same
 
       case EndSimulation => Behaviors.stopped

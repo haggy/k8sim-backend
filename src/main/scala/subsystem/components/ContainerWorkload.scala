@@ -6,6 +6,7 @@ import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.{ActorRef, Behavior}
 import akka.util.Timeout
 import subsystem.SubsystemManager
+import subsystem.simulation.StatsCollector
 import subsystem.storage.StorageInterface
 import subsystem.util.AkkaUtils.NeedsReply
 
@@ -18,6 +19,7 @@ object ContainerWorkload {
   final case class WorkloadInternalsConfig(myPodRef: ActorRef[Pod.PodCommand],
                                            subsysMgr: ActorRef[SubsystemManager.SubSysCommand],
                                            askTimeout: Timeout,
+                                           statsCollector: ActorRef[StatsCollector.StatsCollectorCommand],
                                            tickInterval: FiniteDuration = 100.millis)
   final case class NewContainerWorkloadConfig()
 
@@ -48,9 +50,11 @@ object ContainerWorkload {
   private def running(myId: UUID,
                       internalConf: WorkloadInternalsConfig,
                       config: NewContainerWorkloadConfig): Behavior[ContainerWorkloadCommand] = Behaviors.setup { context =>
+    implicit val askTimeout: Timeout = internalConf.askTimeout
+
     val subsystemManager = internalConf.subsysMgr
     val myPod = internalConf.myPodRef
-    implicit val askTimeout: Timeout = internalConf.askTimeout
+    val statsCollector = internalConf.statsCollector
 
     Behaviors.withTimers[ContainerWorkloadCommand] { timerCtx =>
       timerCtx.startTimerWithFixedDelay(myId, Tick, internalConf.tickInterval)
@@ -67,7 +71,8 @@ object ContainerWorkload {
           Behaviors.same
 
         case HandleStorageSubsysEvent(ev) =>
-          context.log.info("Received event from storage subsystem: [{}]", ev)
+          context.log.trace("Received event from storage subsystem: [{}]", ev)
+          statsCollector ! StatsCollector.RecordStorageOpMetric(myId, ev)
           Behaviors.same
 
         case HandleStorageSubsysFailure(cause) =>
