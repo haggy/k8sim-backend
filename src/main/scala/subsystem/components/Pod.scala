@@ -12,7 +12,7 @@ import subsystem.util.AkkaUtils.NeedsReply
 
 import scala.concurrent.duration._
 import scala.concurrent.duration.FiniteDuration
-import scala.util.{Failure, Success}
+import scala.util.{Failure, Random, Success}
 
 object Pod {
   type PodId = UUID
@@ -116,6 +116,7 @@ object Pod {
           subsystemMgr,
           askTimeout,
           statsCollector,
+          new Random(),
           config.workload.tickInterval
         )))
         context.ask(workload, (ref: ActorRef[ContainerWorkload.ContainerWorkloadEvent]) => ContainerWorkload.StartWorkload(workloadConfig, ref)) {
