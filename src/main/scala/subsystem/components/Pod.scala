@@ -16,10 +16,10 @@ import scala.util.{Failure, Success}
 
 object Pod {
   type PodId = UUID
-  final case class PodMeta(id: PodId)
+  final case class PodMeta(id: PodId, name: String)
 
   final case class WorkloadConfig(tickInterval: FiniteDuration = 100.millis)
-  final case class PodConfig(subsystemManagerConfig: SubsystemManagerConfig, workload: WorkloadConfig = WorkloadConfig())
+  final case class PodConfig(name: String, subsystemManagerConfig: SubsystemManagerConfig, workload: WorkloadConfig = WorkloadConfig())
   sealed trait PodCommand
   sealed trait PodEvent
 
@@ -67,7 +67,7 @@ object Pod {
       case StartPod(conf, statsCollector, originalSender) =>
 
         val myId = UUID.randomUUID()
-        val meta = PodMeta(myId)
+        val meta = PodMeta(myId, conf.name)
         context.log.info("Starting Pod with ID [{}]", myId)
 
         val subsysMgr = context.spawn(SubsystemManager(), "subsystemManager")
