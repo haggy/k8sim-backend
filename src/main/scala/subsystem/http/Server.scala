@@ -37,8 +37,8 @@ object Server {
   final case class NewPodReq(pod: Pod.PodConfig)
   final case class NewPodResp(meta: Pod.PodMeta)
 
-  final case class NewWorkloadReq(workload: ContainerWorkload.NewContainerWorkloadConfig)
-  final case class NewWorkloadResp(meta: ContainerWorkload.WorkloadMeta)
+  final case class NewWorkloadReq(workloadGroup: ContainerWorkload.NewContainerWorkloadConfig)
+  final case class NewWorkloadResp(meta: ContainerWorkload.WorkloadMeta, workloadIds: List[ContainerWorkload.WorkloadId])
 
   final case class AllStatsResp(stats: List[StatsCollector.FlushedStatsForComponent])
 
@@ -93,9 +93,9 @@ class Server(config: HttpServerConfig, simsMgrRef: ActorRef[SimulationsManager.S
   private val newWorkload: Endpoint[NewWorkloadResp] = post(SimulationRoot :: path[SimulationManager.SimulationId] :: PodRoot :: path[Pod.PodId] :: WorkloadRoot :: jsonBody[NewWorkloadReq]) {
     (simId: SimulationManager.SimulationId, podId: Pod.PodId, req: NewWorkloadReq) =>
       simsMgrRef.ask[SimulationsManager.SimsManagerEvent] { ref =>
-        SimulationsManager.StartWorkload(simId, podId, req.workload, ref)
+        SimulationsManager.StartWorkload(simId, podId, req.workloadGroup, ref)
       }.map {
-        case SimulationsManager.WorkloadStarted(meta) => Ok(NewWorkloadResp(meta))
+        case SimulationsManager.WorkloadStarted(meta, workloadIds) => Ok(NewWorkloadResp(meta, workloadIds))
         case SimulationsManager.WorkloadStartFailed(cause) => BadRequest(new Exception(cause))
         case other => unknownManagerResponse(other)
       }.asTwitter

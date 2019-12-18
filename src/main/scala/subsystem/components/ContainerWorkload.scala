@@ -15,14 +15,15 @@ import scala.util.{Failure, Random, Success}
 
 object ContainerWorkload {
   type WorkloadId = UUID
-  final case class WorkloadMeta(id: WorkloadId)
+  type WorkloadGroupId = UUID
+  final case class WorkloadMeta(id: WorkloadId, groupRoleName: String)
   final case class WorkloadInternalsConfig(myPodRef: ActorRef[Pod.PodCommand],
                                            subsysMgr: ActorRef[SubsystemManager.SubSysCommand],
                                            askTimeout: Timeout,
                                            statsCollector: ActorRef[StatsCollector.StatsCollectorCommand],
                                            randInst: Random,
                                            tickInterval: FiniteDuration = 100.millis)
-  final case class NewContainerWorkloadConfig()
+  final case class NewContainerWorkloadConfig(groupRoleName: String, numContainers: Int)
 
   sealed trait ContainerWorkloadCommand
   sealed trait ContainerWorkloadEvent
@@ -45,7 +46,7 @@ object ContainerWorkload {
       case StartWorkload(newConf, replyTo) =>
         val myId = UUID.randomUUID()
         context.log.info("Starting workload with ID [{}]", myId)
-        replyTo ! WorkloadStarted(WorkloadMeta(myId))
+        replyTo ! WorkloadStarted(WorkloadMeta(myId, newConf.groupRoleName))
         running(myId, internalConf, newConf)
 
       case other =>

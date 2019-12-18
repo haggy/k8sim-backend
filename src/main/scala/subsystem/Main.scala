@@ -38,7 +38,7 @@ object SimulationsManager {
   final case class StopWorkload(simId: SimulationManager.SimulationId, podId: Pod.PodId, workloadId: ContainerWorkload.WorkloadId, replyTo: ActorRef[SimsManagerEvent]) extends SimsManagerCommand with NeedsReply[SimsManagerEvent]
   private final case class HandleWorkloadEvent(ev: SimulationManager.SimManagerEvent, originalSender: ActorRef[SimsManagerEvent]) extends SimsManagerCommand
   private final case class HandleWorkloadFailure(cause: Throwable, originalSender: ActorRef[SimsManagerEvent]) extends SimsManagerCommand
-  final case class WorkloadStarted(meta: ContainerWorkload.WorkloadMeta) extends SimsManagerEvent
+  final case class WorkloadStarted(meta: ContainerWorkload.WorkloadMeta, workloadIds: List[ContainerWorkload.WorkloadId]) extends SimsManagerEvent
   final case class WorkloadStartFailed(cause: Throwable) extends SimsManagerEvent
   final case object WorkloadStopped extends SimsManagerEvent
 
@@ -124,8 +124,8 @@ object SimulationsManager {
         }
         Behaviors.same
 
-      case HandleWorkloadEvent(SimulationManager.PodWorkloadStarted(meta), replyTo) =>
-        replyTo ! WorkloadStarted(meta)
+      case HandleWorkloadEvent(SimulationManager.PodWorkloadStarted(meta, workloadIds), replyTo) =>
+        replyTo ! WorkloadStarted(meta, workloadIds)
         Behaviors.same
 
       case HandleWorkloadEvent(SimulationManager.PodWorkloadStartFailed(cause), replyTo) =>

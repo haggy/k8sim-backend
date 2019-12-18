@@ -33,11 +33,11 @@ object Pod {
   private final case class HandleSubsytemStartupFailed(replyTo: ActorRef[PodEvent], cause: Throwable) extends PodCommand with NeedsReply[PodEvent]
 
   final case class StartWorkload(workloadConfig: ContainerWorkload.NewContainerWorkloadConfig, replyTo: ActorRef[PodEvent]) extends PodCommand with NeedsReply[PodEvent]
-  final case class StopWorkload(id: ContainerWorkload.WorkloadId, replyTo: ActorRef[PodEvent]) extends PodCommand with NeedsReply[PodEvent]
+  final case class StopWorkload(id: ContainerWorkload.WorkloadGroupId, replyTo: ActorRef[PodEvent]) extends PodCommand with NeedsReply[PodEvent]
   final case object WorkloadStopped extends PodEvent
   final case class WorkloadNotFound(id: ContainerWorkload.WorkloadId) extends PodEvent
 
-  final case class WorkloadStarted(meta: ContainerWorkload.WorkloadMeta) extends PodEvent
+  final case class WorkloadStarted(meta: ContainerWorkload.WorkloadMeta, workloadIds: List[ContainerWorkload.WorkloadId]) extends PodEvent
   final case class WorkloadStartupFailure(cause: Throwable) extends PodEvent
 
   private final case class HandleContainerWorkloadEvent(ev: ContainerWorkload.ContainerWorkloadEvent,
@@ -52,14 +52,21 @@ object Pod {
   final case object Running extends PodStatus { val asString = "running" }
   final case object Failed extends PodStatus { val asString = "failed" }
 
-  private final case class WorkloadTracker(private val activeWorkloads: Map[ContainerWorkload.WorkloadId, ActorRef[ContainerWorkload.ContainerWorkloadCommand]] = Map.empty) {
-    def add(id: ContainerWorkload.WorkloadId, ref: ActorRef[ContainerWorkload.ContainerWorkloadCommand]): WorkloadTracker =
-      copy(activeWorkloads + (id -> ref))
+  private final case class WorkloadCreationState(newWorkloadConf: ContainerWorkload.NewContainerWorkloadConfig,
+                                                 id: ContainerWorkload.WorkloadGroupId,
+                                                 createdSoFar: Int,
+                                                 workloadIds: List[ContainerWorkload.WorkloadId],
+                                                 workloadRefs: List[ActorRef[ContainerWorkload.ContainerWorkloadCommand]],
+                                                 originalReplyTo: ActorRef[PodEvent])
 
-    def get(id: ContainerWorkload.WorkloadId): Option[ActorRef[ContainerWorkload.ContainerWorkloadCommand]] = activeWorkloads.get(id)
+  private final case class WorkloadTracker(private val activeWorkloads: Map[ContainerWorkload.WorkloadGroupId, List[ActorRef[ContainerWorkload.ContainerWorkloadCommand]]] = Map.empty) {
+    def add(key: ContainerWorkload.WorkloadGroupId, refs: List[ActorRef[ContainerWorkload.ContainerWorkloadCommand]]): WorkloadTracker =
+      copy(activeWorkloads + (key -> refs))
 
-    def remove(id: ContainerWorkload.WorkloadId): WorkloadTracker =
-      copy(activeWorkloads - id)
+    def get(key: ContainerWorkload.WorkloadGroupId): Option[List[ActorRef[ContainerWorkload.ContainerWorkloadCommand]]] = activeWorkloads.get(key)
+
+    def remove(key: ContainerWorkload.WorkloadGroupId): WorkloadTracker =
+      copy(activeWorkloads - key)
   }
 
   def apply()(implicit askTimeout: Timeout): Behavior[PodCommand] = Behaviors.receive { (context, message) =>
@@ -111,36 +118,73 @@ object Pod {
         Behaviors.same
 
       case StartWorkload(workloadConfig, replyTo) =>
-        val workload = context.spawnAnonymous(ContainerWorkload(ContainerWorkload.WorkloadInternalsConfig(
-          context.self,
-          subsystemMgr,
-          askTimeout,
-          statsCollector,
-          new Random(),
-          config.workload.tickInterval
-        )))
-        context.ask(workload, (ref: ActorRef[ContainerWorkload.ContainerWorkloadEvent]) => ContainerWorkload.StartWorkload(workloadConfig, ref)) {
-          case Success(ev) => HandleContainerWorkloadEvent(ev, workload, replyTo)
-          case Failure(t) => HandleContainerWorkloadFailure(t, workload, replyTo)
-        }
-        Behaviors.same
-
-      case HandleContainerWorkloadEvent(ContainerWorkload.WorkloadStarted(wlMeta), workloadRef, replyTo) =>
-        replyTo ! WorkloadStarted(wlMeta)
-        podRunning(selfMeta, config, workloadTracker.add(wlMeta.id, workloadRef), subsystemMgr, statsCollector)
-
-      case HandleContainerWorkloadFailure(cause, workloadRef, replyTo) =>
-        context.stop(workloadRef)
-        replyTo ! WorkloadStartupFailure(cause)
-        Behaviors.same
+        creatingWorkload(
+          WorkloadCreationState(
+            workloadConfig,
+            UUID.randomUUID(),
+            0,
+            List.empty,
+            List.empty,
+            replyTo
+          ),
+          selfMeta, config, workloadTracker, subsystemMgr, statsCollector
+        )
 
       case StopWorkload(id, replyTo) =>
-        val event = workloadTracker.get(id).fold(WorkloadNotFound(id): PodEvent) { workloadRef =>
-          workloadRef ! ContainerWorkload.StopWorkload
+        val event = workloadTracker.get(id).fold(WorkloadNotFound(id): PodEvent) { workloadRefs =>
+          workloadRefs.foreach(_ ! ContainerWorkload.StopWorkload)
           WorkloadStopped
         }
         replyTo ! event
         podRunning(selfMeta, config, workloadTracker.remove(id), subsystemMgr, statsCollector)
     }
+  }
+
+  private def creatingWorkload(state: WorkloadCreationState,
+                               selfMeta: PodMeta,
+                               config: PodConfig,
+                               workloadTracker: WorkloadTracker,
+                               subsystemMgr: ActorRef[SubsystemManager.SubSysCommand],
+                               statsCollector: ActorRef[StatsCollector.StatsCollectorCommand])(implicit askTimeout: Timeout): Behavior[PodCommand] = Behaviors.setup { context =>
+
+    val workload = context.spawnAnonymous(ContainerWorkload(ContainerWorkload.WorkloadInternalsConfig(
+      context.self,
+      subsystemMgr,
+      askTimeout,
+      statsCollector,
+      new Random(),
+      config.workload.tickInterval
+    )))
+    context.ask(workload, (ref: ActorRef[ContainerWorkload.ContainerWorkloadEvent]) => ContainerWorkload.StartWorkload(state.newWorkloadConf, ref)) {
+      case Success(ev) => HandleContainerWorkloadEvent(ev, workload, state.originalReplyTo)
+      case Failure(t) => HandleContainerWorkloadFailure(t, workload, state.originalReplyTo)
+    }
+
+    Behaviors.receiveMessagePartial {
+      case HandleContainerWorkloadEvent(ContainerWorkload.WorkloadStarted(wlMeta), workloadRef, _) =>
+        val nextState = state.copy(
+          createdSoFar = state.createdSoFar + 1,
+          workloadIds = state.workloadIds :+ wlMeta.id,
+          workloadRefs = state.workloadRefs :+ workloadRef
+        )
+
+        if(nextState.createdSoFar < nextState.newWorkloadConf.numContainers) {
+          creatingWorkload(nextState, selfMeta, config, workloadTracker, subsystemMgr, statsCollector)
+        } else {
+          workloadTracker.add(nextState.id, nextState.workloadRefs)
+          state.originalReplyTo ! WorkloadStarted(
+            ContainerWorkload.WorkloadMeta(state.id, state.newWorkloadConf.groupRoleName),
+            state.workloadIds
+          )
+          podRunning(selfMeta, config, workloadTracker, subsystemMgr, statsCollector)
+        }
+
+      case HandleContainerWorkloadFailure(cause, workloadRef, replyTo) =>
+        context.stop(workloadRef)
+        state.workloadRefs.foreach(context.stop)
+        state.originalReplyTo ! WorkloadStartupFailure(cause)
+        podRunning(selfMeta, config, workloadTracker, subsystemMgr, statsCollector)
+    }
+
   }
 }
